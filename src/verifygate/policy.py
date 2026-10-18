@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+from verifygate.contracts import TASK_ID, safe_path
 
 
 def _positive(value: object) -> bool:
@@ -17,17 +18,27 @@ def load_policy(path: Path, candidate_dir: Path) -> tuple[dict, str]:
         raise ValueError("policy must be outside candidate directory")
     with path.open(encoding="utf-8") as stream:
         policy = json.load(stream)
-    if not isinstance(policy, dict) or not {"version", "image", "checks"} <= policy.keys() or not policy.keys() <= {
-        "version", "image", "checks", "timeout", "memory", "cpus", "require_review"
+    if not isinstance(policy, dict) or not {"version", "image", "checks", "task_ids", "language"} <= policy.keys() or not policy.keys() <= {
+        "version", "image", "checks", "task_ids", "language", "stub_mode", "exclusions", "timeout", "memory", "cpus", "require_review"
     }:
         raise ValueError("invalid policy fields")
+    task_ids = policy["task_ids"]
+    if not isinstance(task_ids, list) or not task_ids or any(not isinstance(item, str) or not TASK_ID.fullmatch(item) for item in task_ids) or len(set(task_ids)) != len(task_ids):
+        raise ValueError("task_ids must be unique valid nonempty identifiers")
+    if policy["language"] != "python":
+        raise ValueError("language must be python")
+    if policy.get("stub_mode", "warn") not in ("warn", "off"):
+        raise ValueError("stub_mode must be warn or off")
+    exclusions = policy.get("exclusions", [])
+    if not isinstance(exclusions, list) or any(not isinstance(item, str) or not safe_path(item.replace("*", "x")) or any(char in item for char in "?[]{}") or ("*" in item and not (item.endswith("/*") or item.startswith("*."))) for item in exclusions):
+        raise ValueError("exclusions must be safe relative names or patterns")
     if type(policy["version"]) is not int or policy["version"] != 1:
         raise ValueError("unsupported policy version")
     if not isinstance(policy["image"], str) or not policy["image"].strip():
         raise ValueError("image must be nonempty")
     checks = policy["checks"]
-    if not isinstance(checks, list) or not checks:
-        raise ValueError("checks must be nonempty")
+    if not isinstance(checks, list) or not checks or len(checks) > 16:
+        raise ValueError("checks must contain between 1 and 16 entries")
     ids = set()
     mandatory = 0
     for check in checks:
@@ -54,6 +65,8 @@ def load_policy(path: Path, candidate_dir: Path) -> tuple[dict, str]:
             argv = check.get("argv")
             if not isinstance(argv, list) or not argv or not all(isinstance(arg, str) for arg in argv) or not argv[0]:
                 raise ValueError("command argv must be a nonempty list of strings")
+            if Path(argv[0]).name.lower() in {"sh", "bash", "dash", "zsh", "cmd", "cmd.exe", "powershell", "pwsh"} or any(arg in ("-c", "--command") for arg in argv[1:]):
+                raise ValueError("shell commands and inline code are not allowed")
         elif type(check.get("minimum_tests")) is not int or check["minimum_tests"] < 1:
             raise ValueError("minimum_tests must be a positive integer")
         _limits(check)
@@ -72,16 +85,33 @@ def _limits(settings: dict) -> None:
             raise ValueError(f"{name} must be a positive finite number")
 
 
-def decide(results: list[dict], policy: dict) -> str:
+def decide(results: list[dict], policy: dict, artifact_hash: str | None = None,
+           policy_hash: str | None = None) -> str:
     checks = policy.get("checks", [])
     if not checks:
         return "INCONCLUSIVE"
     by_id = {}
     for result in results:
-        if isinstance(result, dict) and result.get("id") not in by_id:
-            by_id[result.get("id")] = result.get("status")
+        if not isinstance(result, dict) or result.get("id") in by_id or result.get("status") not in {"passed", "failed", "inconclusive"}:
+            return "INCONCLUSIVE"
+        by_id[result["id"]] = result["status"]
     if any(by_id.get(check["id"]) == "failed" and check.get("mandatory", True) for check in checks):
         return "REJECTED"
     if any(by_id.get(check["id"]) != "passed" and check.get("mandatory", True) for check in checks):
         return "INCONCLUSIVE"
+    for check in checks:
+        if not check.get("mandatory", True):
+            continue
+        evidence = next(item for item in results if item["id"] == check["id"])
+        if (evidence.get("runner") != "docker" or evidence.get("exit_code") != 0 or
+                not artifact_hash or evidence.get("snapshot_hash") != artifact_hash or
+                not policy_hash or evidence.get("policy_hash") != policy_hash):
+            return "INCONCLUSIVE"
+        if check["type"] == "unittest":
+            count = evidence.get("tests_run")
+            report_hash = evidence.get("report_sha256")
+            if (type(count) is not int or count < check["minimum_tests"] or
+                    not isinstance(report_hash, str) or len(report_hash) != 64 or
+                    any(char not in "0123456789abcdef" for char in report_hash)):
+                return "INCONCLUSIVE"
     return "NEEDS_REVIEW" if policy.get("require_review", False) else "VERIFIED"

@@ -1,11 +1,15 @@
 {
   "version": 1,
   "image": "verifygate:local",
+  "task_ids": ["VG-DEMO"],
+  "language": "python",
+  "stub_mode": "warn",
+  "exclusions": [".git", ".venv", "__pycache__", ".env"],
   "timeout": 120,
   "memory": 512,
   "cpus": 1,
   "checks": [
-    {"id": "syntax", "type": "command", "argv": ["python", "-c", "import ast,pathlib; [ast.parse(p.read_bytes(), filename=str(p)) for p in pathlib.Path('.').rglob('*.py')]"]},
+    {"id": "syntax", "type": "command", "argv": ["python", "-I", "/opt/app/src/verifygate/syntax_check.py"]},
     {"id": "unit-tests", "type": "unittest", "minimum_tests": 1}
   ]
 }

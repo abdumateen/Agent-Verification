@@ -1,0 +1,13 @@
+#!/bin/sh
+# Opt-in sample. Install only into a trusted hook location controlled by the owner.
+set -eu
+: "${VERIFYGATE_HOME:?set trusted verifier checkout path}"
+: "${VERIFYGATE_CLAIM:?set completion claim path}"
+: "${VERIFYGATE_POLICY:?set trusted policy path}"
+: "${VERIFYGATE_LEDGER:?set audit database path}"
+: "${VERIFYGATE_REPORT:?set report path}"
+candidate="$(git rev-parse --show-toplevel)"
+PYTHONPATH="$VERIFYGATE_HOME/src" python -m verifygate.cli verify \
+  --candidate "$candidate" --claim "$VERIFYGATE_CLAIM" \
+  --policy "$VERIFYGATE_POLICY" --ledger "$VERIFYGATE_LEDGER" \
+  --report "$VERIFYGATE_REPORT"

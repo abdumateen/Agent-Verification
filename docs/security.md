@@ -1,0 +1,7 @@
+# Security operations
+
+Run the verifier from a trusted checkout, supply protected policy/image/paths, and keep the candidate checkout separate. The sample policy requires a known task ID and mandatory syntax and unittest checks. Do not run unreviewed Dockerfiles or scripts as setup. Grant Docker privileges only to the trusted verifier job; candidate code receives no daemon socket or credentials by default. Avoid mounting host secrets, SSH agents, home directories, or unrestricted volumes. Review the Docker daemon's own privileges and favor a remote microVM for hostile code.
+
+Keep report/ledger paths in access-controlled storage outside the candidate; never publish raw logs without review. The runner caps retained stdout/stderr to 64 KiB each and test JSON to 64 KiB, but arbitrary secret text in the retained portion is **not automatically redacted**. Run with no real credentials. Retain and externally checkpoint ledger hashes if deletion detection matters. Restrict policy and image modifications to a trusted owner; policy path separation alone is not authorization. Hooks are convenience workflow enforcement only; require a protected CI check for merge control.
+
+Known gaps: candidate tests may forge writable JSON report, image tag is not immutable, Docker isolation untested here, cleanup after daemon faults untested, and ledger tail truncation invisible without an external anchor. Fail closed rather than treating these limitations as solved.

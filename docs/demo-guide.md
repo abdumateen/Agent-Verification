@@ -1,0 +1,5 @@
+# Demo guide
+
+From the trusted checkout, install nothing on the host beyond your existing Python/Docker/Make setup. Run `make test`, `docker build -t verifygate:local .`, then `mkdir -p .verifygate` and `PYTHONPATH=src python -m verifygate.cli demo --ledger .verifygate/audit.sqlite --output-dir .verifygate`. The policy is outside both candidates; the broken fixture returns subtraction for an addition test. `examples/claim.json` asserts tests ran, but this assertion is ignored. On an available Docker engine the expected outcome is REJECTED then VERIFIED with different hashes; verify it yourself and do not call it observed until executed. On this Windows host without Docker, observed output is INCONCLUSIVE for both and exit 1.
+
+Use `status --ledger .verifygate/audit.sqlite`, `report --ledger ... --run-id ID`, and `audit-verify --ledger ...` to inspect evidence. Altering a retained row should fail integrity validation; perform tamper experiments on a copied database only, never the user's actual ledger. The pre-commit hook and CI wrapper are opt-in examples, not automatic installations.

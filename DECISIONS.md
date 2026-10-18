@@ -11,3 +11,12 @@ Alternatives: candidate `.verifygate.yml` or trusted path supplied by verifier. 
 
 ## D-004 — SQLite hash chain is tamper-evident, not immutable
 Alternatives: existing JSONL ledger, SQLite, remote transparency log. Select SQLite transactional events with hash links and local integrity validation. A privileged operator can rewrite/truncate/recompute all records; external signed checkpoints are deferred.
+
+## D-005 — Keep optional MCP project-scoped
+Alternatives: manual JSON-RPC, globally installed SDK, or official SDK optional extra. Select official `mcp==2.1.1` via `uv.lock` and host-configured paths. Official build-server docs were consulted; stdio API registration was tested locally. Trade-off: no live client handshake; MCP can request verification but cannot enforce other agent actions.
+
+## D-006 — Run trusted Python harness scripts with `-I`
+Alternatives: `python -m verifygate...` from candidate cwd or absolute trusted scripts with isolated startup. Select latter to prevent a candidate `verifygate` package from shadowing the trusted harness. The harness adds candidate cwd only after trusted imports to discover tests. Candidate tests still run in Docker, not on host.
+
+## D-007 — Report digest in audited event
+Alternatives: rely on report run ID/hash alone or bind full report content. Select SHA-256 of canonical result without the circular audit hash, stored in the SQLite event. The report reader recomputes and checks it. Local ledger truncation/rewrite remains possible without an external anchor.

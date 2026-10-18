@@ -1,44 +1,44 @@
-# Independent Agent Verification Gate (Python MVP)
+# VerifyGate — Independent Agent Verification Gate
 
-A completion **claim** triggers independent checks; it never counts as evidence. The CLI snapshots a candidate, runs policy-controlled commands in disposable Docker containers, and returns `VERIFIED`, `REJECTED`, `INCONCLUSIVE`, or `NEEDS_REVIEW` with a snapshot and policy hash. Only `VERIFIED` exits 0. This MVP is a local workflow gate, **not** a bypass-proof security boundary.
+An agent's completion claim requests a check; it is **not proof**. VerifyGate snapshots a Python candidate, binds it to an administrator-controlled JSON policy, runs mandatory checks in disposable Docker containers, evaluates observed evidence, and records a hash-linked SQLite decision. `VERIFIED` means only that the configured checks passed on that artifact and policy. This is an engineering MVP, not a hostile-code sandbox or bypass-proof merger.
 
-## Requirements and setup
+## Setup (clean Linux)
 
-- Linux: Python **3.12.7** (see `.python-version`), GNU Make and Docker Engine with permission to run containers. Docker is required for actual verification, but not for offline tests.
-- There are no Python packages to download: `requirements.lock` documents the standard-library-only dependency set. Do not install global packages.
-- From a clean checkout, run `make test` (offline), then `docker build -t verifygate:local .` to prepare the trusted runner image. The Dockerfile contains the verifier and its Python runtime and runs the tests at build time. For fully air-gapped builds, preload `python:3.12.7-slim` in Docker's local image store first; Docker will not download it if present.
-- The host-side CLI runs with `PYTHONPATH=src python -m verifygate.cli --help`. No `.env` file or credentials are needed. `.env.example` is a placeholder for future optional integrations.
+1. Install Python **3.12.7**, GNU Make, Docker Engine, and permission for the **trusted verifier process** to access Docker. Do not give Docker access to candidate jobs. Docker is needed for actual verification, not for offline unit tests.
+2. Clone this repository. `make test` runs the standard-library suite without network or Docker. `.python-version` pins Python; `pyproject.toml` and `uv.lock` pin the optional MCP SDK. `requirements.lock` records that the core itself has no third-party packages. If using MCP, install project-local dependencies with `uv sync --frozen --extra mcp --no-dev` (uv must be available); do not install globally.
+3. From the trusted checkout run `docker build -t verifygate:local .`. The Dockerfile pins the Python and uv version tags, installs locked packages into `/opt/app/.venv`, and runs tests. **This build has not been executed on this Windows host** (Docker is absent). Offline Docker builds require the base images and locked package artifacts preloaded.
+4. Run CLI from the checkout: `PYTHONPATH=src python -m verifygate.cli --help` or, in a project venv, `uv run --frozen --offline python -m verifygate.cli --help`. On Windows without GNU Make, use `PYTHONPATH=src python -m unittest discover -s tests -v` from Git Bash.
 
-## Run the demo
-
-The policy is in `policies/python.json`, **outside both candidate trees**. Keep trusted policies in a protected location that the candidate agent cannot change. The claim's `tests_run` is informational, not evidence.
+## Demo and CLI
 
 ```sh
 mkdir -p .verifygate
-PYTHONPATH=src python -m verifygate.cli verify \
-  --candidate examples/broken --claim examples/claim.json \
-  --policy policies/python.json --ledger .verifygate/audit.jsonl \
-  --report .verifygate/broken.report.json
-# exit 1: REJECTED; a real assertion failure appears in the report
-
-PYTHONPATH=src python -m verifygate.cli verify \
-  --candidate examples/passing --claim examples/claim.json \
-  --policy policies/python.json --ledger .verifygate/audit.jsonl \
-  --report .verifygate/passing.report.json
-# exit 0: VERIFIED on a different artifact hash
-
-PYTHONPATH=src python -m verifygate.cli audit-verify --ledger .verifygate/audit.jsonl
-# VALID / exit 0, or INVALID / exit 1 after alteration
+PYTHONPATH=src python -m verifygate.cli version
+PYTHONPATH=src python -m verifygate.cli policy-validate --candidate examples/passing --policy policies/python.json
+PYTHONPATH=src python -m verifygate.cli demo --ledger .verifygate/audit.sqlite --output-dir .verifygate
+PYTHONPATH=src python -m verifygate.cli status --ledger .verifygate/audit.sqlite
+PYTHONPATH=src python -m verifygate.cli audit-verify --ledger .verifygate/audit.sqlite
 ```
 
-When Docker is unavailable or a check times out, verification returns `INCONCLUSIVE` and exits 1. Malformed input or an untrusted policy path exits 2 as `UNVERIFIED`. The CLI requires the report and ledger outside the candidate tree; use separate storage with an existing parent directory. If the candidate changes while checking, the previous verdict cannot be reused for the changed workspace.
+`demo` invokes the **actual Docker runner** for broken then passing fixture; it never substitutes fake evidence. With Docker absent both runs are `INCONCLUSIVE`, and demo exits 1. With the trusted `verifygate:local` image built and Docker working, the intended outcome is broken `REJECTED` and passing `VERIFIED` (not yet observed on this host). The `tests_run` field in `examples/claim.json` is never evidence.
 
-## Test and deploy
+One candidate at a time:
 
-`make test` is the single offline test command. It runs 10 standard-library unit/integration tests, including real execution of the passing and broken sample suites; the Docker boundary is mocked because the host may have no Docker daemon. On Windows without `make`, run `PYTHONPATH=src python -m unittest discover -s tests -v` in a Bash shell.
+```sh
+PYTHONPATH=src python -m verifygate.cli verify \
+  --candidate examples/broken --claim examples/claim.json \
+  --policy policies/python.json --ledger .verifygate/audit.sqlite \
+  --report .verifygate/broken.report.json
+```
 
-To deploy as a required CI check, build the trusted runner image outside the unreviewed candidate branch, store the policy in a protected branch or administrator-controlled location, and invoke `verifygate verify` with a CI-produced claim and candidate checkout. Require the resulting CI status on the protected branch. Do not grant a candidate job a Docker socket or privileged Docker access; the **trusted verifier job** alone needs access to its container service. This repository does not provision branch protection or ship an agent lifecycle hook; a local CLI alone cannot stop an agent that uses another path.
+Exit 0 = `VERIFIED`; exit 1 = `REJECTED`, `INCONCLUSIVE`, or `NEEDS_REVIEW`; exit 2 = invalid input or failed report storage (`UNVERIFIED`). `status`, `report --run-id ID`, and `audit-verify` read recorded runs. Output files and policy must be outside the candidate. A claim's task ID must occur in the trusted policy's `task_ids` list. The policy image tag is administrator-controlled but mutable; use a trusted build and protected CI settings, not an agent-provided image. Reports are bounded and their content hash is tied to the audit event.
 
-## Evidence and limits
+## Integrations and deployment
 
-The policy's `syntax` check parses Python files without writing to the read-only source; `unit-tests` uses a trusted `unittest` harness and requires at least one discovered test. Each run records the claim, artifact hash, policy hash, actual command, exit code and test count. The JSONL ledger chains event hashes; `audit-verify` detects modification or reordering of retained entries, **not** truncation or a fully rewritten chain without an external checkpoint. The report contains command output for useful diagnostics; do not run tests with secrets or publish unreviewed reports. A `VERIFIED` verdict means the configured checks passed, not that all product requirements are correct. Docker restrictions (non-root, no network, read-only candidate, dropped capabilities, CPU/memory/PID/time limits) reduce risk but are not sufficient isolation for hostile code; use microVMs or a hardened remote service in that setting. The test-report directory is writable by the test process, so a malicious candidate can tamper with local reports; the current MVP is for cooperative or moderately untrusted agent mistakes, not an adversarial proof system.
+- Optional MCP: `uv sync --frozen --extra mcp --no-dev`, then configure a trusted host with `VERIFYGATE_CANDIDATE`, `VERIFYGATE_CLAIM`, `VERIFYGATE_POLICY`, `VERIFYGATE_LEDGER`, and `VERIFYGATE_REPORT` paths **outside candidate control**. Start `uv run --frozen --offline verifygate-mcp`. The stdio SDK exposes six tools; MCP cannot itself block other agent tools. See `docs/architecture.md`.
+- Opt-in Git sample hook: copy `hooks/pre-commit` into a **trusted hooks directory**, provide `VERIFYGATE_HOME` (trusted verifier checkout), `VERIFYGATE_CLAIM`, `VERIFYGATE_POLICY`, `VERIFYGATE_LEDGER`, `VERIFYGATE_REPORT`, and configure the target repo's hook path yourself. The hook exits nonzero on rejected or inconclusive verification; Git hooks can be bypassed with `--no-verify` and are not a strong boundary. No hook installation is automatic.
+- CI-ready wrapper: set the same trusted variables plus `VERIFYGATE_CANDIDATE` in a protected verifier job and execute `sh scripts/ci-gate.sh`. Build the image and load policy from protected sources, then require the CI status on the branch. The repository does **not** configure branch protection or cloud CI. Do not run a candidate Dockerfile or give candidate code the Docker socket.
+
+## Tests, security and limits
+
+`make test` is the single offline Linux test command. Tests mock the Docker boundary; no live Docker check/build was possible on this Windows host. Python AST parsing is a deterministic syntax check; optional stub warnings do not prove semantic correctness. Candidate suites can forge reports through the writable output mount, and Docker is not a sufficient boundary for hostile code. Command output may contain secrets; use test credentials only, restrict access to reports, and review output before publishing. A local SQLite hash chain detects retained-row modification/reordering, not deletion of its tail without external anchoring. See `docs/testing.md`, `docs/threat-model.md`, `docs/security.md`, and `docs/limitations.md` for precise evidence and unresolved work.
