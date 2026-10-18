@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "image": "verifygate:local",
+  "timeout": 120,
+  "memory": 512,
+  "cpus": 1,
+  "checks": [
+    {"id": "syntax", "type": "command", "argv": ["python", "-c", "import ast,pathlib; [ast.parse(p.read_bytes(), filename=str(p)) for p in pathlib.Path('.').rglob('*.py')]"]},
+    {"id": "unit-tests", "type": "unittest", "minimum_tests": 1}
+  ]
+}
