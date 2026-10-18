@@ -8,3 +8,6 @@ Files changed: `src/verifygate/{contracts,policy,snapshots,sandbox,test_harness,
 
 ## 2026-10-18T19:09:19+05:30 — Phase 10 package/regression check
 Commands: `uv run --frozen --offline --extra mcp python -m unittest discover -s tests -v` → 31 tests OK; `uv build --offline` → wheel and sdist built. Build artifacts under ignored `dist/` are not a Docker build. Added `dist/` exclusions in `.gitignore`/`.dockerignore`. No real Docker execution occurred. Next: run the same artifact under a trusted Linux Docker daemon and address writable test-report spoofing.
+
+## 2026-10-18T19:14:51+05:30 — Final checkpoint report
+Created `docs/final-report.md` with actual commands, 31-test result, Docker-unavailable demo output, security gaps, files and next task. No new Docker evidence; project remains IN_PROGRESS/BLOCKED for live sandbox acceptance. Next action remains a trusted Linux Docker run followed by tamper-resistant test-report collection.
