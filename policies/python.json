@@ -8,8 +8,10 @@
   "timeout": 120,
   "memory": 512,
   "cpus": 1,
+  "acceptance": {"required": true, "suite_id": "calculator", "version": "1", "path": "../acceptance", "container_path": "/opt/app/acceptance", "minimum_tests": 1},
   "checks": [
     {"id": "syntax", "type": "command", "argv": ["python", "-I", "/opt/app/src/verifygate/syntax_check.py"]},
-    {"id": "unit-tests", "type": "unittest", "minimum_tests": 1}
+    {"id": "unit-tests", "type": "unittest", "minimum_tests": 1},
+    {"id": "acceptance", "type": "acceptance", "minimum_tests": 1}
   ]
 }

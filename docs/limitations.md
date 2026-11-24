@@ -1,7 +1,7 @@
 # Current limitations
 
 - Docker and GNU Make are absent on this Windows host. Dockerfile build and actual sandbox verification have **not** passed here; `make test` was replaced by the equivalent Python unittest command for local evidence.
-- Candidate-written unittest report is readable from a writable mount. Hashing after execution catches later modifications but cannot prove a malicious candidate did not forge it before collection. Use a stronger reporting channel and hostile-code isolation before high-assurance use.
+- The writable host `/results` report mount has been removed. The trusted harness now emits a nonce-bound record on stdout, and the supervisor validates exactly one record plus exit-code consistency. Python output is redirected, but direct `os.write` can bypass redirection; extra bytes fail closed. The nonce is visible in argv and is not authentication. A trusted acceptance suite now lives outside the candidate and is fingerprinted/mounted read-only, but it imports candidate code in the same container and is not a complete semantic or kernel-isolation guarantee.
 - Python adapter does AST syntax and configurable stub warnings, not full import/type/reference or semantic verification. No C#/VB.NET/TypeScript adapter.
 - The SQLite chain detects retained-row modification and interior deletion, not tail deletion or full rewrite. No external checkpoint or signatures.
 - Report stdout/stderr may contain sensitive values; limits are size bounds, not comprehensive secret redaction.

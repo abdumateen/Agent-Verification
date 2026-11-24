@@ -20,3 +20,12 @@ Alternatives: `python -m verifygate...` from candidate cwd or absolute trusted s
 
 ## D-007 — Report digest in audited event
 Alternatives: rely on report run ID/hash alone or bind full report content. Select SHA-256 of canonical result without the circular audit hash, stored in the SQLite event. The report reader recomputes and checks it. Local ledger truncation/rewrite remains possible without an external anchor.
+
+## D-008 — Remove the candidate-writable report mount
+Problem: the old unittest runner mounted a `0777` host temp directory at `/results`; candidate tests could fabricate `report.json` and obtain passing counts. Select no evidence-directory mount. The trusted harness emits one nonce-delimited count record on stdout; the supervisor validates exactly one record, checks it against the observed exit code, and hashes the canonical record. Trade-off: stdout is still an untrusted process channel and a malicious in-process test can attempt a targeted nonce spoof; duplicate records fail closed. A trusted acceptance-test baseline remains future work.
+
+## D-009 — Explicit evidence provenance
+Production verification requires `provenance=live_docker`, trusted harness stdout provenance, matching artifact/policy hashes, and complete mandatory evidence. Synthetic test doubles are accepted only by an explicit `allow_simulated=True` pure-policy test option. This prevents mock evidence from being mislabeled as a production sandbox result.
+
+## D-010 — Trusted acceptance suite is an external read-only baseline
+Alternatives: candidate tests only, copy candidate tests after modification, or a separately stored suite mounted read-only. Select the repository's `acceptance/` directory referenced by the trusted policy and copied into the trusted image, with policy-relative path validation, regular-file-only manifest, suite fingerprint, version/ID, and a read-only container mount. The suite imports candidate implementation code but owns its assertions and selection. It is stronger than candidate tests, not a complete semantic or kernel-isolation proof.

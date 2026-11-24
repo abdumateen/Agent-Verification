@@ -8,7 +8,10 @@ from verifygate.contracts import TASK_ID, safe_path
 
 
 def _positive(value: object) -> bool:
-    return type(value) in (int, float) and math.isfinite(value) and value > 0
+    if type(value) not in (int, float):
+        return False
+    assert isinstance(value, (int, float))
+    return math.isfinite(value) and value > 0
 
 
 def load_policy(path: Path, candidate_dir: Path) -> tuple[dict, str]:
@@ -19,7 +22,7 @@ def load_policy(path: Path, candidate_dir: Path) -> tuple[dict, str]:
     with path.open(encoding="utf-8") as stream:
         policy = json.load(stream)
     if not isinstance(policy, dict) or not {"version", "image", "checks", "task_ids", "language"} <= policy.keys() or not policy.keys() <= {
-        "version", "image", "checks", "task_ids", "language", "stub_mode", "exclusions", "timeout", "memory", "cpus", "require_review"
+        "version", "image", "checks", "task_ids", "language", "stub_mode", "exclusions", "timeout", "memory", "cpus", "require_review", "acceptance", "acceptance_fingerprint"
     }:
         raise ValueError("invalid policy fields")
     task_ids = policy["task_ids"]
@@ -48,7 +51,7 @@ def load_policy(path: Path, candidate_dir: Path) -> tuple[dict, str]:
         allowed = {"id", "type", "mandatory", "timeout", "memory", "cpus"}
         if kind == "command":
             allowed.add("argv")
-        elif kind == "unittest":
+        elif kind in ("unittest", "acceptance"):
             allowed.add("minimum_tests")
         else:
             raise ValueError("unknown check type")
@@ -75,6 +78,40 @@ def load_policy(path: Path, candidate_dir: Path) -> tuple[dict, str]:
     _limits(policy)
     if "require_review" in policy and type(policy["require_review"]) is not bool:
         raise ValueError("require_review must be boolean")
+    acceptance = policy.get("acceptance")
+    if acceptance is None:
+        if any(check["type"] == "acceptance" for check in checks):
+            raise ValueError("acceptance check requires acceptance configuration")
+        canonical = json.dumps(policy, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+        return policy, hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    if not isinstance(acceptance, dict) or not {"required", "suite_id", "version", "path", "container_path", "minimum_tests"} <= acceptance.keys():
+        raise ValueError("acceptance config is required")
+    if type(acceptance["required"]) is not bool or acceptance["container_path"] != "/opt/app/acceptance":
+        raise ValueError("invalid acceptance metadata")
+    if any(not isinstance(acceptance[k], str) or not acceptance[k].strip() for k in ("suite_id", "version", "path")):
+        raise ValueError("invalid acceptance metadata")
+    if type(acceptance["minimum_tests"]) is not int or acceptance["minimum_tests"] < 1:
+        raise ValueError("invalid acceptance minimum_tests")
+    suite = (location.parent / acceptance["path"]).resolve(strict=True)
+    if (candidate == suite or candidate in suite.parents or suite in candidate.parents or
+            not suite.is_dir() or suite.is_symlink()):
+        raise ValueError("acceptance suite must be outside candidate and be a directory")
+    entries = []
+    for item in sorted(suite.rglob("*")):
+        if item.is_symlink():
+            raise ValueError("acceptance suite may contain regular files only")
+        if item.is_dir():
+            continue
+        if not item.is_file():
+            raise ValueError("acceptance suite may contain regular files only")
+        if "__pycache__" in item.parts or item.suffix == ".pyc":
+            continue
+        entries.append((item.relative_to(suite).as_posix(), hashlib.sha256(item.read_bytes()).hexdigest()))
+    if not entries:
+        raise ValueError("acceptance suite must not be empty")
+    fingerprint = hashlib.sha256(json.dumps(entries, separators=(",", ":")).encode()).hexdigest()
+    acceptance["fingerprint"] = fingerprint
+    policy["acceptance_fingerprint"] = fingerprint
     canonical = json.dumps(policy, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
     return policy, hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -86,7 +123,8 @@ def _limits(settings: dict) -> None:
 
 
 def decide(results: list[dict], policy: dict, artifact_hash: str | None = None,
-           policy_hash: str | None = None) -> str:
+           policy_hash: str | None = None, *, report_hash: str | None = None,
+           allow_simulated: bool = False) -> str:
     checks = policy.get("checks", [])
     if not checks:
         return "INCONCLUSIVE"
@@ -103,15 +141,34 @@ def decide(results: list[dict], policy: dict, artifact_hash: str | None = None,
         if not check.get("mandatory", True):
             continue
         evidence = next(item for item in results if item["id"] == check["id"])
-        if (evidence.get("runner") != "docker" or evidence.get("exit_code") != 0 or
+        if ((not allow_simulated and evidence.get("provenance") != "live_docker") or
+                evidence.get("runner") != "docker" or evidence.get("exit_code") != 0 or
                 not artifact_hash or evidence.get("snapshot_hash") != artifact_hash or
                 not policy_hash or evidence.get("policy_hash") != policy_hash):
             return "INCONCLUSIVE"
         if check["type"] == "unittest":
+            if (evidence.get("report_provenance") != "trusted_harness_stdout" or
+                    evidence.get("test_source", "candidate") != check.get("test_source", "candidate")):
+                return "INCONCLUSIVE"
             count = evidence.get("tests_run")
-            report_hash = evidence.get("report_sha256")
+            evidence_report_hash = evidence.get("report_sha256")
             if (type(count) is not int or count < check["minimum_tests"] or
-                    not isinstance(report_hash, str) or len(report_hash) != 64 or
-                    any(char not in "0123456789abcdef" for char in report_hash)):
+                    not isinstance(evidence_report_hash, str) or len(evidence_report_hash) != 64 or
+                    any(char not in "0123456789abcdef" for char in evidence_report_hash)):
+                return "INCONCLUSIVE"
+            if report_hash is not None and evidence_report_hash != report_hash:
+                return "INCONCLUSIVE"
+        if check["type"] == "acceptance":
+            if (evidence.get("report_provenance") != "trusted_harness_stdout" or
+                    evidence.get("test_source") != "trusted_acceptance" or
+                    evidence.get("acceptance_suite_id") != policy["acceptance"]["suite_id"] or
+                    evidence.get("acceptance_suite_version") != policy["acceptance"]["version"] or
+                    evidence.get("acceptance_fingerprint") != policy["acceptance_fingerprint"] or
+                    type(evidence.get("tests_run")) is not int or
+                    evidence["tests_run"] < policy["acceptance"]["minimum_tests"]):
+                return "INCONCLUSIVE"
+            evidence_report_hash = evidence.get("report_sha256")
+            if (not isinstance(evidence_report_hash, str) or len(evidence_report_hash) != 64 or
+                    any(char not in "0123456789abcdef" for char in evidence_report_hash)):
                 return "INCONCLUSIVE"
     return "NEEDS_REVIEW" if policy.get("require_review", False) else "VERIFIED"

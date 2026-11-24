@@ -38,14 +38,23 @@ class WorkflowTests(unittest.TestCase):
         ]
         rejected = verify(ROOT / "examples" / "broken", self.claim, self.rules, self.ledger, self.report)
         self.assertEqual(rejected["verdict"], "REJECTED")
-        def observed(snapshot, rules, *, snapshot_hash, policy_hash):
+        def observed(snapshot, rules, *, snapshot_hash, policy_hash, acceptance=None):
             shared = {"status": "passed", "runner": "docker", "exit_code": 0,
-                      "snapshot_hash": snapshot_hash, "policy_hash": policy_hash}
-            return [{"id": "syntax", **shared},
-                    {"id": "unit-tests", **shared, "tests_run": 1, "report_sha256": "a" * 64}]
+                      "snapshot_hash": snapshot_hash, "policy_hash": policy_hash,
+                      "provenance": "synthetic_test_double", "report_provenance": "trusted_harness_stdout"}
+            results = [{"id": "syntax", **shared},
+                       {"id": "unit-tests", **shared, "tests_run": 1,
+                        "report_sha256": "a" * 64, "test_source": "candidate"}]
+            if acceptance:
+                results.append({"id": "acceptance", **shared, "tests_run": 1,
+                                "report_sha256": "b" * 64, "test_source": "trusted_acceptance",
+                                "acceptance_suite_id": acceptance["suite_id"],
+                                "acceptance_suite_version": acceptance["version"],
+                                "acceptance_fingerprint": acceptance["fingerprint"]})
+            return results
         runner.side_effect = observed
         accepted = verify(ROOT / "examples" / "passing", self.claim, self.rules, self.ledger, self.report)
-        self.assertEqual(accepted["verdict"], "VERIFIED")
+        self.assertEqual(accepted["verdict"], "INCONCLUSIVE")
         self.assertNotEqual(rejected["artifact_hash"], accepted["artifact_hash"])
         self.assertTrue(audit.verify_ledger(self.ledger))
         self.assertEqual(json.loads(self.report.read_text())["audit_hash"], accepted["audit_hash"])
@@ -76,13 +85,19 @@ class WorkflowTests(unittest.TestCase):
         custom_claim.write_bytes(self.claim.read_bytes())
         custom_policy = self.base / "policy.json"
         custom_policy.write_bytes(self.rules.read_bytes())
+        custom_policy_data = json.loads(custom_policy.read_text(encoding="utf-8"))
+        custom_policy_data.pop("acceptance", None)
+        custom_policy_data.pop("acceptance_fingerprint", None)
+        custom_policy_data["checks"] = [check for check in custom_policy_data["checks"] if check["type"] != "acceptance"]
+        custom_policy.write_text(json.dumps(custom_policy_data), encoding="utf-8")
         def mutate(snapshot, rules, **kwargs):
             (candidate / "calculator.py").write_text("def add(a,b): return a-b\n", encoding="utf-8")
             custom_policy.write_text(custom_policy.read_text(encoding="utf-8").replace('"timeout": 120', '"timeout": 121'), encoding="utf-8")
             shared = {"status": "passed", "runner": "docker", "exit_code": 0,
-                      "snapshot_hash": kwargs["snapshot_hash"], "policy_hash": kwargs["policy_hash"]}
+                      "snapshot_hash": kwargs["snapshot_hash"], "policy_hash": kwargs["policy_hash"],
+                      "provenance": "live_docker", "report_provenance": "trusted_harness_stdout"}
             return [{"id": "syntax", **shared}, {"id": "unit-tests", **shared,
-                    "tests_run": 1, "report_sha256": "a" * 64}]
+                    "tests_run": 1, "report_sha256": "a" * 64, "test_source": "candidate"}]
         runner.side_effect = mutate
         result = verify(candidate, custom_claim, custom_policy, self.ledger, self.report)
         self.assertEqual(result["verdict"], "INCONCLUSIVE")
@@ -107,15 +122,19 @@ class WorkflowTests(unittest.TestCase):
 
     def test_actual_harness_discovers_both_demo_projects(self):
         for candidate, exit_code, failed in (("passing", 0, 0), ("broken", 1, 1)):
-            report = self.base / f"{candidate}.json"
+            nonce = "a" * 48
             proc = subprocess.run(
-                [sys.executable, "-I", str(ROOT / "src" / "verifygate" / "test_harness.py"), "--report", str(report)],
+                [sys.executable, "-I", str(ROOT / "src" / "verifygate" / "test_harness.py"), "--nonce", nonce],
                 cwd=ROOT / "examples" / candidate,
                 env={"PYTHONPATH": str(ROOT / "src")},
                 capture_output=True, text=True,
             )
             self.assertEqual(proc.returncode, exit_code, proc.stdout + proc.stderr)
-            data = json.loads(report.read_text())
+            marker_start = f"VERIFYGATE_RESULT<{nonce}>:"
+            marker_end = f":VERIFYGATE_RESULT<{nonce}>"
+            records = proc.stdout.split(marker_start)
+            self.assertEqual(len(records), 2)
+            data = json.loads(records[1].split(marker_end, 1)[0])
             self.assertEqual(data["tests_run"], 1)
             self.assertEqual(data["failures"], failed)
 

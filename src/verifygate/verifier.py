@@ -19,6 +19,10 @@ def verify(candidate: Path, claim_path: Path, policy_path: Path,
            ledger: Path, report: Path) -> dict:
     candidate = candidate.resolve(strict=True)
     rules, policy_hash = policy.load_policy(policy_path, candidate)
+    acceptance_meta = None
+    if rules.get("acceptance"):
+        acceptance_dir = (policy_path.resolve().parent / rules["acceptance"]["path"]).resolve(strict=True)
+        acceptance_meta = {**rules["acceptance"], "host_path": str(acceptance_dir)}
     claim = contracts.load_claim(claim_path, rules["task_ids"])
     for output in (ledger, report):
         if candidate == output.resolve() or candidate in output.resolve().parents:
@@ -46,8 +50,11 @@ def verify(candidate: Path, claim_path: Path, policy_path: Path,
             "time": datetime.now(timezone.utc).isoformat(),
         })
         static = analyze(snapshot, rules.get("stub_mode", "warn"))
-        results = sandbox.run_checks(snapshot, rules, snapshot_hash=artifact_hash,
-                                     policy_hash=policy_hash)
+        kwargs = dict(snapshot_hash=artifact_hash, policy_hash=policy_hash)
+        if acceptance_meta:
+            results = sandbox.run_checks(snapshot, rules, snapshot_hash=artifact_hash, policy_hash=policy_hash, acceptance=acceptance_meta)
+        else:
+            results = sandbox.run_checks(snapshot, rules, snapshot_hash=artifact_hash, policy_hash=policy_hash)
         verdict = policy.decide(results, rules, artifact_hash, policy_hash)
         if static["status"] == "failed":
             verdict = "REJECTED"
@@ -60,13 +67,18 @@ def verify(candidate: Path, claim_path: Path, policy_path: Path,
             results.append({"id": "workspace-integrity", "status": "inconclusive",
                             "output": "Candidate changed after snapshot; reverify new artifact"})
         try:
-            _, current_policy_hash = policy.load_policy(policy_path, candidate)
+            current_rules, current_policy_hash = policy.load_policy(policy_path, candidate)
         except (OSError, ValueError):
-            current_policy_hash = None
+            current_rules, current_policy_hash = None, None
         if current_policy_hash != policy_hash:
             verdict = "INCONCLUSIVE"
             results.append({"id": "policy-integrity", "status": "inconclusive",
                             "output": "Trusted policy changed during verification"})
+        if acceptance_meta and (current_rules is None or
+                                current_rules.get("acceptance_fingerprint") != acceptance_meta["fingerprint"]):
+            verdict = "INCONCLUSIVE"
+            results.append({"id": "acceptance-integrity", "status": "inconclusive",
+                            "output": "Trusted acceptance suite changed during verification"})
     result = {
         "run_id": run_id, "task_id": claim["task_id"], "verdict": verdict,
         "artifact_hash": artifact_hash, "policy_hash": policy_hash,
@@ -81,7 +93,15 @@ def verify(candidate: Path, claim_path: Path, policy_path: Path,
         "verdict": verdict, "report_path": str(report.resolve()),
         "report_sha256": report_digest,
         "checks": [{"id": check["id"], "status": check["status"],
-                    "exit_code": check.get("exit_code"), "tests_run": check.get("tests_run")}
+                    "runner": check.get("runner"), "provenance": check.get("provenance"),
+                    "report_provenance": check.get("report_provenance"),
+                    "test_source": check.get("test_source"),
+                    "command": check.get("command"), "exit_code": check.get("exit_code"),
+                    "tests_run": check.get("tests_run"),
+                    "report_sha256": check.get("report_sha256"),
+                    "acceptance_suite_id": check.get("acceptance_suite_id"),
+                    "acceptance_suite_version": check.get("acceptance_suite_version"),
+                    "acceptance_fingerprint": check.get("acceptance_fingerprint")}
                    for check in results],
         "time": datetime.now(timezone.utc).isoformat(),
     })

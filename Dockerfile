@@ -7,6 +7,7 @@ COPY src /opt/app/src
 COPY tests /opt/app/tests
 COPY examples /opt/app/examples
 COPY policies /opt/app/policies
+COPY acceptance /opt/app/acceptance
 COPY Makefile requirements.lock .python-version /opt/app/
 ENV PYTHONPATH=/opt/app/src PYTHONDONTWRITEBYTECODE=1 PATH="/opt/app/.venv/bin:$PATH"
 RUN uv sync --frozen --extra mcp --no-dev && python -m unittest discover -s tests -v

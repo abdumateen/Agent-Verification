@@ -40,8 +40,10 @@ class CoreTests(unittest.TestCase):
         loaded, digest = policy.load_policy(path, self.candidate)
         self.assertEqual(len(digest), 64)
         good = dict(id="unit", status="passed", runner="docker", exit_code=0, tests_run=1,
-                    report_sha256="a" * 64, snapshot_hash="snap", policy_hash=digest)
-        self.assertEqual(policy.decide([good], loaded, "snap", digest), "NEEDS_REVIEW")
+                    report_sha256="a" * 64, snapshot_hash="snap", policy_hash=digest,
+                    report_provenance="trusted_harness_stdout", test_source="candidate")
+        self.assertEqual(policy.decide([good], loaded, "snap", digest), "INCONCLUSIVE")
+        self.assertEqual(policy.decide([good], loaded, "snap", digest, allow_simulated=True), "NEEDS_REVIEW")
         self.assertEqual(policy.decide([dict(id="unit", status="passed")], loaded, "snap", digest), "INCONCLUSIVE")
         self.assertEqual(policy.decide([], loaded), "INCONCLUSIVE")
         self.assertEqual(policy.decide([dict(id="unit", status="failed")], loaded), "REJECTED")
@@ -50,6 +52,35 @@ class CoreTests(unittest.TestCase):
             policy.load_policy(self.candidate / "policy.json", self.candidate)
         data["checks"].append(dict(id="unit", type="command", argv=["true"]))
         self.write_json("policy.json", data)
+        with self.assertRaises(ValueError):
+            policy.load_policy(path, self.candidate)
+
+    def test_required_acceptance_suite_is_fingerprinted_and_trusted(self):
+        suite = self.root / "acceptance"
+        suite.mkdir()
+        (suite / "test_acceptance.py").write_text("import unittest\nclass A(unittest.TestCase):\n def test_ok(self): self.assertTrue(True)\n", encoding="utf-8")
+        data = dict(version=1, image="python:3.12", task_ids=["t"], language="python",
+                    acceptance={"required": True, "suite_id": "suite", "version": "1",
+                                "path": "acceptance", "container_path": "/opt/app/acceptance",
+                                "minimum_tests": 1},
+                    checks=[dict(id="acceptance", type="acceptance", minimum_tests=1)])
+        path = self.write_json("policy.json", data)
+        loaded, digest = policy.load_policy(path, self.candidate)
+        self.assertEqual(loaded["acceptance"]["fingerprint"], loaded["acceptance_fingerprint"])
+        self.assertEqual(len(digest), 64)
+        original_hash = loaded["acceptance_fingerprint"]
+        (suite / "test_acceptance.py").write_text("changed", encoding="utf-8")
+        changed, changed_digest = policy.load_policy(path, self.candidate)
+        self.assertNotEqual(changed["acceptance_fingerprint"], original_hash)
+        self.assertNotEqual(changed_digest, digest)
+
+    def test_acceptance_suite_cannot_be_candidate_or_parent(self):
+        data = dict(version=1, image="python:3.12", task_ids=["t"], language="python",
+                    acceptance={"required": True, "suite_id": "suite", "version": "1",
+                                "path": ".", "container_path": "/opt/app/acceptance",
+                                "minimum_tests": 1},
+                    checks=[dict(id="acceptance", type="acceptance", minimum_tests=1)])
+        path = self.write_json("policy.json", data)
         with self.assertRaises(ValueError):
             policy.load_policy(path, self.candidate)
 
