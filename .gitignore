@@ -1,8 +1,47 @@
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.so
 .venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# Project artifacts
 .verifygate/
 *.jsonl
 *.report.json
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+.coverage
+.coverage.*
+htmlcov/
+
+# Secrets and local environment
 .env
-dist/
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+credentials.json
+secrets.json
+
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini
